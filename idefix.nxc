@@ -1,0 +1,305 @@
+// Author: <muellphi@informatik.uni-freiburg.de>
+
+// Values in comments marked with BP are recommended Best Pracitice values
+// Activates DEBUG mode with verbose display output.
+#define DEBUG 0
+// If lightsensor meassurement deviate from sweetspot (average over calibrated black and white values) SHIFTSPOT points drive mode will change from direct (< SHIFTSPOT) to sync (> SHIFTSPOT)
+// BP: 10
+#define SHIFTSPOT 10
+// Modifier for steering, the higher the more steering
+// KP is modifier for sync driving
+// KP_DIRECT is modifier for direct driving
+// MAX_STEERING is limiter for steering, steering is in range from -100 to 100
+// BP: 4.5, 2.4, 100, 100
+#define KP 4.5
+#define KP_DIRECT 2.4
+#define MAX_STEERING 100
+#define MAX_STEERING_DIRECT 100
+// Modifiers for speed, the highter the faster
+// MAX_SPEED is limiter for speed in Sync driving
+// MAX_SPEED_DIRECT is limiter for direct driving
+// BP: 5.0, 70, 60
+#define KS 5.0
+#define MAX_SPEED 70
+#define MAX_SPEED_DIRECT 60
+// Modifiers for highspeed on straight course
+// N_LOOPS_STRAIGHT_MIN is modifier how many measurements neeeded in STEERING_TOLERANCE ot go to MAX_SPEED_STRAIGHT
+// If one measurement is not in STEERING_TOLERANCE a punishment to N_LOOPS_STRAIGHT_MIN * N_LOOPS_PUNISH will be applied.
+// This results that counting n_loops starts not from 0 when only short drift in steering will occur.
+// BP: 300, 0.4, 10, 80
+#define N_LOOPS_STRAIGHT_MIN 300 
+#define N_LOOPS_PUNISH 0.4
+#define STEERING_TOLERANCE 10
+#define MAX_SPEED_STRAIGHT 80
+// Modifiers for distance check
+// To increase perfomance distance is only checked every CHECK_DEIST_EVERY_XLOOPS loops.
+// BP: 10
+#define CHECK_DIST_EVERY_XLOOPS 10
+
+void WaitForCenterButton() {
+    // Wait until Center Button is pressed.
+    while (!ButtonPressed(BTNCENTER, true));
+    Wait(50);
+}
+
+void InitSensors() {
+    // Initialize all needed sensors.
+    // Lichtsensor vorne
+    SetSensorLight(IN_1);
+    // UltraSonic Sensor (SensorUS() in cm)
+    SetSensorLowspeed(IN_2);
+} 
+
+int ReadLightSensor1() {
+    // Read LightSensor and return reading
+    int reading = Sensor(IN_1);
+    return reading;
+}
+
+int Calibration(string calibrationof) {
+    // Read LightSensor value and return
+    ClearScreen();
+    TextOut(10, LCD_LINE1, "Calibration:");
+    TextOut(10, LCD_LINE2, calibrationof);
+    WaitForCenterButton();
+    int reading = ReadLightSensor1();
+    Wait(500);
+    return reading;
+}
+
+float CalcSweetspot(int white, int black) {
+    // Calculate sweetspot from white and black readings (average/midpoint)
+    float sweetspot = (white - black)/2 + black;
+    return sweetspot;
+}
+
+void Ready2Go (int white, int black, float sweetspot) {
+    // Print white, black, sweetspot and wait for Center Button
+    ClearScreen();
+    TextOut(0, LCD_LINE1, StrCat("White: ", NumToStr(white)));
+    TextOut(0, LCD_LINE2, StrCat("Black: ", NumToStr(black)));
+    TextOut(0, LCD_LINE3, StrCat("Sweetspot: ", NumToStr(sweetspot)));
+    WaitForCenterButton();
+    ClearScreen();
+}
+
+int CalcSteeringDirect(float sweetspot, int lightSensorValue) {
+    // Calculate needed steering correction
+    int steering = KP_DIRECT * (sweetspot - lightSensorValue);
+    
+    // If steering exceeds MAX_STEERING, set steering to MAX_STEERING
+    if (steering < -MAX_STEERING_DIRECT) {
+        steering = -MAX_STEERING_DIRECT;
+    }
+    if (steering > MAX_STEERING_DIRECT) {
+        steering = MAX_STEERING_DIRECT;
+    }
+
+     return steering;
+}
+
+int CalcSteeringSync(float sweetspot, int lightSensorValue) {
+    // Calculate needed steering correction
+    int steering = KP * (sweetspot - lightSensorValue);
+    
+    // Steering of 50 is not allowed, because steering = 50 is stop in OnFwdSync()
+    if (steering == 50) {
+        steering = 51;
+    }
+
+    // If steering exceeds MAX_STEERING, set steering to MAX_STEERING
+    if (steering < -MAX_STEERING) {
+        steering = -MAX_STEERING;
+    }
+    if (steering > MAX_STEERING) {
+        steering = MAX_STEERING;
+    }
+
+     return steering;
+}
+
+float CalcSpeed(float sweetspot, int lightSensorValue, int steering, int &n_loops_straight, int drive_mode) {
+    // Calculate good speed
+
+    int new_speed;
+    int max_speed;
+
+    if (drive_mode == 1)
+        max_speed = MAX_SPEED;
+    else
+        max_speed = MAX_SPEED_DIRECT;
+
+    // Check if previous measurements indicate straight course
+    if ((steering > -STEERING_TOLERANCE) && (steering < STEERING_TOLERANCE)) {
+        // One more measurement indicates straight course
+        n_loops_straight = n_loops_straight + 1;
+        // Check if enough measurements indicate straight course
+        if (n_loops_straight > N_LOOPS_STRAIGHT_MIN) {
+            new_speed = MAX_SPEED_STRAIGHT;
+        } else {
+            new_speed = (-((lightSensorValue - sweetspot) / KS)*((lightSensorValue - sweetspot) / KS)) + max_speed;
+        }
+    } else {
+        // Seems like it's not a straight course
+        // Enforce punishment
+        n_loops_straight = n_loops_straight * N_LOOPS_PUNISH;
+        // Calculate speed the default way
+        new_speed = (-((lightSensorValue - sweetspot) / KS)*((lightSensorValue - sweetspot) / KS)) + max_speed;
+    }
+    return new_speed;
+}
+
+void DriveSync(int speed, int steering) {
+    // Drive with sync
+
+    OnFwdSync(OUT_AB, speed, steering);
+}
+
+void DriveDirect(int speed, int steering) {
+    // Calculate needed steering with with direct instructions for each motor
+
+    // Calculate Steering and resulting speed for motors
+    int SpeedMotorA = speed - steering;
+    int SpeedMotorB = speed + steering;
+
+    // Tell motors how to drive
+    OnFwd(OUT_A, SpeedMotorA);
+    OnFwd(OUT_B, SpeedMotorB);
+}
+
+bool IsObtacleUS(int distance) {
+    // Is there a obstacle in distance cm (via UltraSonicSensor)?
+    
+    // Read SensorValue
+    Wait(1);
+    int usSensorValue = SensorUS(IN_2);
+    bool isObstacle = false;
+
+    // Is SensorValue lower or equal distance? return 1
+    if (usSensorValue <= distance)
+        isObstacle = true;
+    else
+        isObstacle = false;
+    return isObstacle; 
+}
+
+void turn360deg () {
+    // Turn robot 360 degrees
+    RotateMotorEx(OUT_AB, 90, 360, 100, true, true);
+    Wait(500);
+}
+
+void StopAndWaitObstacle (int distance) {
+    // Coast motors and wait until obstacle is removed
+    
+    // Drive a little bit further (align to basket)
+    RotateMotorEx(OUT_AB, 50, 120, 0, true, true);
+
+    // Stand still
+    while(IsObtacleUS(20)) {
+        Coast(OUT_AB);
+        Wait(500); 
+    }
+}
+
+void PutBallInBasket() {
+    // Finish that track
+    RotateMotorEx (OUT_AB, 50, 180, 0, true, true);
+    RotateMotor(OUT_C, 75, -68);
+    Wait(5000);
+    RotateMotor(OUT_C, 75, 68);
+}
+
+void DebugOutput(int lightSensorValue, float sweetspot, int steering, int speed, int drive_mode) {
+    // Print debug information
+
+    ClearScreen();
+    TextOut(0, LCD_LINE1, StrCat("LSensor re: ", NumToStr(lightSensorValue)));
+    TextOut(0, LCD_LINE2, StrCat("Sweetspot: ", NumToStr(sweetspot)));
+    TextOut(0, LCD_LINE3, StrCat("Steering: ", NumToStr(steering)));
+    TextOut(0, LCD_LINE4, StrCat("Speed: ", NumToStr(speed)));
+    TextOut(0, LCD_LINE5, StrCat("Drive mode: ", NumToStr(drive_mode)));
+}
+
+task main () {
+    // This is the main task
+
+    // Initialize variables
+    int new_steering = 0;
+    int new_speed = 0;
+    int n_loops_straight = 0;
+    int lightSensorValue = 0;
+    int drive_mode = 99;
+    int n_loops_sum = 0;
+    int n_obstacle_sum = 1; 
+    // Initialize sensors
+    InitSensors();
+
+    // Calibration
+    int white = Calibration("white");
+    int black = Calibration("black");
+    float sweetspot = CalcSweetspot(white, black);
+
+    // We are ready to go (Show data and wait for Button)
+    Ready2Go(white, black, sweetspot);
+
+    // There we slowly go
+    OnFwdSync(OUT_AB, 20, 0);
+
+    while(true) {
+        // Main loop
+         
+        // Increment loop counter
+        n_loops_sum = n_loops_sum + 1;
+        
+        // Read LightSensor
+        lightSensorValue = ReadLightSensor1();
+
+        // Is there an obstacle in 20cm?
+        if (n_loops_sum % CHECK_DIST_EVERY_XLOOPS == 0) {
+            // Do challenges with obstacles
+            if (IsObtacleUS(20)) {
+                //n_obstacle_sum = n_obstacle_sum + 1;
+                if (n_obstacle_sum == 3) {
+                    PlayTone(462, 400); 
+                    PutBallInBasket();
+                    break;
+                }
+                if (n_obstacle_sum == 2) {
+                    PlayTone(362, 400);
+                    StopAndWaitObstacle(20);
+                    Wait(500);
+                    n_obstacle_sum = 3;
+                }
+                if (n_obstacle_sum == 1) {
+                    PlayTone(262, 400);
+                    turn360deg();
+                    n_obstacle_sum = 2;
+                } 
+            }
+        }
+
+        // Evaluate drive mode (SYNC or DIRECT)
+        if ((lightSensorValue > sweetspot + SHIFTSPOT) || (lightSensorValue < sweetspot - SHIFTSPOT))
+            drive_mode = 1;
+        else
+            drive_mode = 0;
+
+        // Calculate needed steering
+        if (drive_mode == 0) {
+            new_steering = CalcSteeringDirect(sweetspot, lightSensorValue);
+            new_speed = CalcSpeed(sweetspot, lightSensorValue, new_steering, n_loops_straight, drive_mode);
+            DriveDirect(new_speed, new_steering);
+        } else { 
+            new_steering = CalcSteeringSync(sweetspot, lightSensorValue);
+            new_speed = CalcSpeed(sweetspot, lightSensorValue, new_steering, n_loops_straight, drive_mode);
+            DriveSync(new_speed, new_steering);
+        }
+
+        // Debugging?
+        if (DEBUG == 1) {
+            DebugOutput(lightSensorValue, sweetspot, new_steering, new_speed, drive_mode);
+        }
+    }
+    PlaySound(SOUND_FAST_UP);
+}
