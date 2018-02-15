@@ -9,7 +9,7 @@ Der hier veröffentlichte Quellcode des Roboters verfolgt einen minimalistischen
 - Enorme Anpassbarkeit – über 13 dedizierte Variablen um das Fahrverhalten anzupassen
 - 3 unterschiedliche Fahrmodi
 - Jeder Fahrmodus ist individuell anpassbar
-- Linienverfolgung mit nur einem Lichtsensor
+- Linienverfolgung mit nur einem Lichtsensor (P-Line-Follower)
 - Nur 2 verbaute Sensoren
 
 Weitere Informationen sind in der datasheet.pdf zu finden.
